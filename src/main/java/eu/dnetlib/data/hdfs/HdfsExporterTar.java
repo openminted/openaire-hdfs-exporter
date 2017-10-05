@@ -7,12 +7,10 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
 import org.kamranzafar.jtar.TarEntry;
-import org.kamranzafar.jtar.TarHeader;
 import org.kamranzafar.jtar.TarOutputStream;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.util.LinkedMultiValueMap;
@@ -70,24 +68,19 @@ public class HdfsExporterTar {
             conf.set(e.getKey().toString(), e.getValue().toString());
         }
 
-        new HdfsExporterTar().export(conf, path, outDir, cl.hasOption("v"), start, total, zip);
+        String url = p.getProperty("service.host");
+
+        new HdfsExporterTar().export(conf, path, url, outDir, cl.hasOption("v"), start, total, zip);
     }
 
-    private void export(Configuration conf, Path path, String outDir, boolean verbose, int start, int total, int zip) throws IOException {
-        int pcount = 0;
-        int rcount = 0;
-        int dcount = 0;
-        int ocount = 0;
-
+    private void export(Configuration conf, Path path, String url, String outDir, boolean verbose, int start, int total, int zip) throws IOException {
+        int rcount = 0; //results found
         int spoint = 0; // starting point
-        int fcount = 0; //files' count
         int doccount = 0; //files' count
 
-        String url = "http://adonis.athenarc.gr:8082/bridge/insert";
         long startTime = System.currentTimeMillis();
 
-        // Uncomment following lines to get old functionality (saving in files and stuff)
-        File currentdir = new File(outDir + "/results");//
+        File currentdir = new File(outDir + "/results");
         FileUtils.forceMkdir(currentdir);
 
         Iterator<Pair<Text, Text>> pairIterator = SequenceFileUtils.read(path, conf).iterator();
@@ -105,21 +98,16 @@ public class HdfsExporterTar {
 
             try {
                 String subfile = p.getFirst().toString().split("\\|")[1];
-//                String subfile = p.getFirst().toString().split("::")[1].substring(0, 3);
-                //String subdir = p.getFirst().toString().split("::")[1].substring(0, 3);
 
                 String type = "";
                 if (p.getSecond().toString().contains("oaf:datasource")) {
                     type = "datasources";
-//					dcount++;
                     continue;
                 } else if (p.getSecond().toString().contains("oaf:project")) {
                     type = "projects";
-//					pcount++;
                     continue;
                 } else if (p.getSecond().toString().contains("oaf:organization")) {
                     type = "organizations";
-//					ocount++;
                     continue;
                 } else if (p.getSecond().toString().contains("oaf:person")) {
                     type = "persons";
@@ -131,7 +119,6 @@ public class HdfsExporterTar {
                     throw new IllegalArgumentException("invalid entity type");
                 }
 
-                fcount = dcount + pcount + ocount + rcount;
                 String entity;
 
                 if (p.getSecond().toString().startsWith("<?xml ")) {
@@ -140,23 +127,9 @@ public class HdfsExporterTar {
                     entity = p.getSecond().toString();
 
                 try {
-                    if ((entity.contains("bestlicense")
-                            &&
-                            (entity.contains("classname=\"Open Access\"")
-                                    || entity.contains("classname=\"Embargo\"")
-                                    || entity.contains("classname=\"12 Months Embargo\"")
-                                    || entity.contains("classname=\"6 Months Embargo\"")
-                                    || entity.contains("classname=\"Restricted\"")
-
-                            ))
-                            &&
-                            (entity.contains("resulttype") && entity.contains("classname=\"publication\""))
-                            &&
-                            (entity.contains("<deletedbyinference>false</deletedbyinference>"))
-                            ) {
-//                        int starting = entity.indexOf("<dri:objIdentifier>") + "<dri:objIdentifier>".length();
-//                        int ending = entity.indexOf("</dri:objIdentifier>");
-//                        String subfile = entity.substring(starting, ending);
+                    if ((entity.contains("bestlicense") && entity.contains("classname=\"Open Access\""))
+                            && (entity.contains("resulttype") && entity.contains("classname=\"publication\""))
+                            && (entity.contains("<deletedbyinference>false</deletedbyinference>"))) {
 
                         StringReader reader = new StringReader(entity);
                         if (verbose) System.out.println("w: " + subfile);
@@ -170,11 +143,11 @@ public class HdfsExporterTar {
                         doccount++;
                     }
                     if (total > 0) {
-                        if (fcount % 100 == 0)
-                            System.out.println("Progress: " + doccount + " files sent out of " + fcount + " (" + (double) ((fcount * 100) / total) + "%)");
+                        if (rcount % 100 == 0)
+                            System.out.println("Progress: " + doccount + " files sent out of " + rcount + " (" + (double) ((rcount * 100) / total) + "%)");
                     } else {
-                        if (fcount % 100 == 0)
-                            System.out.println("Progress: " + doccount + " files sent out of " + fcount);
+                        if (rcount % 100 == 0)
+                            System.out.println("Progress: " + doccount + " files sent out of " + rcount);
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -200,7 +173,6 @@ public class HdfsExporterTar {
                     HttpEntity<MultiValueMap<String, Object>> httpEntity = new HttpEntity<>(map, headers);
 
                     for (File file : currentdir.listFiles()) {
-//                        System.out.println(file.getName());
                         out.putNextEntry(new TarEntry(file, file.getName()));
                         FileReader reader1 = new FileReader(file);
                         IOUtils.copy(reader1, out);
@@ -209,14 +181,14 @@ public class HdfsExporterTar {
                     }
                     out.close();
 
-                    System.out.println("file size?: " + tarFile.length());
-                    restTemplate.postForObject(url, httpEntity, String.class);//.postForObject(url, tarFile, File.class);
+                    System.out.println("File size: " + tarFile.length());
+                    restTemplate.postForObject(url, httpEntity, String.class);
                     long finishingTime = System.currentTimeMillis();
-                    System.out.println("Finished zipping and sending tar file to Rest endpoint at " + (finishingTime - gatheringTime) + " milis");
+                    System.out.println("Finished zipping and sending tar file to Rest endpoint at " + (finishingTime - gatheringTime) + " millis");
                     tarFile.delete();
                 }
 
-                if (total > 0 && fcount >= total) {
+                if (total > 0 && rcount >= total) {
                     break;
                 }
             } catch (Exception e) {
@@ -253,11 +225,11 @@ public class HdfsExporterTar {
             out.close();
 
             System.out.println("Sending tar file to Rest endpoint...");
-            restTemplate.postForObject(url, httpEntity, String.class);//.postForObject(url, tarFile, File.class);
+            restTemplate.postForObject(url, httpEntity, String.class);
             tarFile.deleteOnExit();
         }
 
-        System.out.println("Downloaded " + doccount + " results, " + pcount + " projects, " + ocount + " organizations, " + dcount + " datasources");
+        System.out.println("Downloaded " + doccount + " results");
         System.out.println("Started from " + spoint + " file and downloaded " + doccount + " files in total");
 
         long end = System.currentTimeMillis();
